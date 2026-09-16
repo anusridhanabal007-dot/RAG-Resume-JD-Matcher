@@ -1,0 +1,26 @@
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# ChromaDB / vector database
+chroma_db/
+vectorstore/
+
+# Uploaded files
+uploads/
+
+# Personal / private resume files
+data/resume/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
