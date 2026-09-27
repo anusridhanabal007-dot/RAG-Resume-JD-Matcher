@@ -10,7 +10,8 @@ def generate_explanation(
     # --------------------------------------------------
     # Strengths
     # --------------------------------------------------
-
+    semantic_similarity = float(semantic_similarity)
+    skill_score = float(skill_score)
     strengths = []
 
     if semantic_similarity >= 70:

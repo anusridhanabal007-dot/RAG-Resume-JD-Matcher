@@ -1,12 +1,17 @@
-from sentence_transformers import SentenceTransformer
-import chromadb
 import uuid
+import chromadb
+from sentence_transformers import SentenceTransformer
 
 from skill_matcher import match_skills
 from scoring import calculate_overall_score, get_recommendation
 from explanation import generate_explanation
 from resume_writing_analyzer import analyze_resume_writing
+from jd_analyzer import analyze_job_description
 
+
+# --------------------------------------------------
+# Load embedding model
+# --------------------------------------------------
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
@@ -15,187 +20,88 @@ client = chromadb.PersistentClient(
 )
 
 
+# --------------------------------------------------
+# Main Resume Matching Function
+# --------------------------------------------------
+
 def match_resume(resume_text, jd_text):
 
-    # ---------------------------------------------------------
-    # 1. CREATE A TEMPORARY CHROMADB COLLECTION
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # Create temporary Chroma collection
+    # --------------------------------------------------
 
-    collection_name = (
-        "resume_" + uuid.uuid4().hex[:8]
-    )
+    collection_name = "resume_" + str(uuid.uuid4()).replace("-", "")
 
     collection = client.create_collection(
-        name=collection_name,
-        metadata={
-            "hnsw:space": "cosine"
-        }
+        name=collection_name
     )
 
-    # ---------------------------------------------------------
-    # 2. CHUNK RESUME
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # Split resume into chunks
+    # --------------------------------------------------
 
     words = resume_text.split()
 
+    chunks = []
+
     chunk_size = 100
 
-    resume_chunks = []
-
-    for i in range(
-        0,
-        len(words),
-        chunk_size
-    ):
+    for i in range(0, len(words), chunk_size):
 
         chunk = " ".join(
-            words[
-                i:i + chunk_size
-            ]
+            words[i:i + chunk_size]
         )
 
-        if chunk.strip():
+        chunks.append(chunk)
 
-            resume_chunks.append(
-                chunk
-            )
+    # --------------------------------------------------
+    # Create embeddings for resume chunks
+    # --------------------------------------------------
 
-    print(
-        "\nResume chunks created:",
-        len(resume_chunks)
-    )
-
-    # ---------------------------------------------------------
-    # 3. CREATE RESUME EMBEDDINGS
-    # ---------------------------------------------------------
-
-    if resume_chunks:
-
-        embeddings = model.encode(
-            resume_chunks
-        ).tolist()
-
-        ids = [
-            f"chunk_{i}"
-            for i in range(
-                len(resume_chunks)
-            )
-        ]
-
-        collection.add(
-            ids=ids,
-            documents=resume_chunks,
-            embeddings=embeddings
-        )
-
-    print(
-        "Resume chunks stored:",
-        len(resume_chunks)
-    )
-
-    # ---------------------------------------------------------
-    # 4. CREATE JD EMBEDDING
-    # ---------------------------------------------------------
-
-    jd_embedding = model.encode(
-        jd_text
+    resume_embeddings = model.encode(
+        chunks
     ).tolist()
 
-    print(
-        "JD embedding size:",
-        len(jd_embedding)
+    ids = [
+        f"chunk_{i}"
+        for i in range(len(chunks))
+    ]
+
+    collection.add(
+        ids=ids,
+        documents=chunks,
+        embeddings=resume_embeddings
     )
 
-    # ---------------------------------------------------------
-    # 5. RETRIEVE MOST RELEVANT RESUME CHUNKS
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # Create JD embedding
+    # --------------------------------------------------
 
-    if resume_chunks:
+    jd_embedding = model.encode(
+        [jd_text]
+    ).tolist()[0]
 
-        n_results = min(
-            5,
-            len(resume_chunks)
-        )
+    # --------------------------------------------------
+    # Retrieve most relevant resume sections
+    # --------------------------------------------------
 
-        results = collection.query(
-            query_embeddings=[
-                jd_embedding
-            ],
-            n_results=n_results,
-            include=[
-                "documents",
-                "distances"
-            ]
-        )
-
-        documents = results[
-            "documents"
-        ][0]
-
-        distances = results[
-            "distances"
-        ][0]
-
-    else:
-
-        documents = []
-        distances = []
-
-    print(
-        "\nMOST RELEVANT RESUME CHUNKS:"
+    results = collection.query(
+        query_embeddings=[jd_embedding],
+        n_results=min(5, len(chunks))
     )
 
-    print(
-        "-" * 60
-    )
+    documents = results["documents"][0]
 
-    similarities = []
+    distances = results["distances"][0]
 
-    for i, (
-        document,
-        distance
-    ) in enumerate(
-        zip(
-            documents,
-            distances
-        ),
-        start=1
-    ):
+    # --------------------------------------------------
+    # Convert distances to similarity
+    # --------------------------------------------------
 
-        similarity = 1 - distance
-
-        similarity = max(
-            0,
-            min(
-                1,
-                similarity
-            )
-        )
-
-        similarities.append(
-            similarity
-        )
-
-        print(
-            f"\nResult {i}"
-        )
-
-        print(
-            "Resume Chunk:",
-            document
-        )
-
-        print(
-            f"Distance: {distance:.4f}"
-        )
-
-        print(
-            f"Similarity: {similarity:.4f}"
-        )
-
-    # ---------------------------------------------------------
-    # 6. FIND BEST SEMANTIC MATCH
-    # ---------------------------------------------------------
+    similarities = [
+        1 - distance
+        for distance in distances
+    ]
 
     if similarities:
 
@@ -217,37 +123,14 @@ def match_resume(resume_text, jd_text):
 
         best_chunk = ""
 
-    print(
-        "-" * 60
-    )
-
-    if best_chunk:
-
-        print(
-            "\nBEST MATCHING RESUME SECTION:"
-        )
-
-        print(
-            best_chunk
-        )
-
-    semantic_similarity = (
-        best_similarity * 100
-    )
-
     semantic_similarity = round(
-        semantic_similarity,
+        best_similarity * 100,
         2
     )
 
-    print(
-        f"\nSemantic Similarity: "
-        f"{semantic_similarity}%"
-    )
-
-    # ---------------------------------------------------------
-    # 7. SKILL MATCHING
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # Skill Matching
+    # --------------------------------------------------
 
     matched_skills, missing_skills, skill_score = match_skills(
         jd_text,
@@ -259,57 +142,31 @@ def match_resume(resume_text, jd_text):
         2
     )
 
-    print(
-        "\nMatched Skills:"
-    )
-
-    for skill in matched_skills:
-
-        print(
-            f"✓ {skill}"
-        )
-
-    print(
-        "\nMissing Skills:"
-    )
-
-    for skill in missing_skills:
-
-        print(
-            f"✗ {skill}"
-        )
-
-    print(
-        f"\nSkill Match: "
-        f"{skill_score}%"
-    )
-
-    # ---------------------------------------------------------
-    # 8. OVERALL JD MATCH SCORE
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # Overall Score
+    # --------------------------------------------------
 
     overall_score = calculate_overall_score(
         semantic_similarity,
         skill_score
     )
 
-    print(
-        f"\nOverall Match Score: "
-        f"{overall_score}%"
+    # Make sure score is numeric
+    overall_score = float(
+        overall_score
     )
+
+    # --------------------------------------------------
+    # Recommendation
+    # --------------------------------------------------
 
     recommendation = get_recommendation(
         overall_score
     )
 
-    print(
-        f"Recommendation: "
-        f"{recommendation}"
-    )
-
-    # ---------------------------------------------------------
-    # 9. EXISTING MATCH EXPLANATION
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # Explanation
+    # --------------------------------------------------
 
     explanation = generate_explanation(
         semantic_similarity,
@@ -320,85 +177,42 @@ def match_resume(resume_text, jd_text):
         recommendation
     )
 
-    # ---------------------------------------------------------
-    # 10. RESUME WRITING ANALYSIS
-    # ---------------------------------------------------------
-
-    print(
-        "\nRESUME WRITING ANALYSIS"
-    )
-
-    print(
-        "-" * 60
-    )
+    # --------------------------------------------------
+    # Resume Writing Analysis
+    # --------------------------------------------------
 
     writing_analysis = analyze_resume_writing(
         resume_text
     )
 
-    print(
-        "Specificity Score:",
-        writing_analysis[
-            "specificity_score"
-        ]
+    # --------------------------------------------------
+    # Job Description Analysis
+    # --------------------------------------------------
+
+    jd_analysis = analyze_job_description(
+        jd_text
     )
 
-    print(
-        "AI-Writing Indicators:",
-        writing_analysis[
-            "ai_indicator_score"
-        ]
-    )
+    # --------------------------------------------------
+    # Delete temporary Chroma collection
+    # --------------------------------------------------
 
-    print(
-        "Human-Writing Indicators:",
-        writing_analysis[
-            "human_indicator_score"
-        ]
-    )
+    try:
 
-    print(
-        "Writing Style:",
-        writing_analysis[
-            "writing_style"
-        ]
-    )
+        client.delete_collection(
+            name=collection_name
+        )
 
-    print(
-        "AI Indicator Level:",
-        writing_analysis[
-            "ai_indicator_level"
-        ]
-    )
+    except Exception:
 
-    print(
-        "Human Indicator Level:",
-        writing_analysis[
-            "human_indicator_level"
-        ]
-    )
+        pass
 
-    print(
-        "Numbers Found:",
-        writing_analysis[
-            "number_count"
-        ]
-    )
-
-    print(
-        "Action Verbs:",
-        writing_analysis[
-            "action_verb_count"
-        ]
-    )
-
-    # ---------------------------------------------------------
-    # 11. RETURN ALL RESULTS
-    # ---------------------------------------------------------
+    # --------------------------------------------------
+    # Return Results
+    # --------------------------------------------------
 
     return {
 
-        # JD MATCHING
         "semantic_similarity":
             semantic_similarity,
 
@@ -417,7 +231,6 @@ def match_resume(resume_text, jd_text):
         "recommendation":
             recommendation,
 
-        # RETRIEVAL
         "retrieved_documents":
             documents,
 
@@ -427,28 +240,21 @@ def match_resume(resume_text, jd_text):
         "best_chunk":
             best_chunk,
 
-        # EXISTING EXPLANATION
         "strengths":
-            explanation[
-                "strengths"
-            ],
+            explanation["strengths"],
 
         "improvements":
-            explanation[
-                "improvements"
-            ],
+            explanation["improvements"],
 
         "recommended_skills":
-            explanation[
-                "recommended_skills"
-            ],
+            explanation["recommended_skills"],
 
         "summary":
-            explanation[
-                "summary"
-            ],
+            explanation["summary"],
 
-        # RESUME WRITING ANALYSIS
         "writing_analysis":
-            writing_analysis
+            writing_analysis,
+
+        "jd_analysis":
+            jd_analysis
     }
